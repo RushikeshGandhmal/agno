@@ -22,7 +22,15 @@ class BrowserbaseTools(Toolkit):
         enable_screenshot: bool = True,
         enable_get_page_content: bool = True,
         enable_close_session: bool = True,
+        enable_click: bool = False,
+        enable_type: bool = False,
+        enable_get_element_text: bool = False,
+        enable_fill_form: bool = False,
+        enable_wait_for_selector: bool = False,
+        enable_get_session_recording: bool = False,
         all: bool = False,
+        block_ads: bool = False,
+        solve_captchas: bool = False,
         parse_html: bool = True,
         max_content_length: Optional[int] = 100000,
         **kwargs,
@@ -38,7 +46,15 @@ class BrowserbaseTools(Toolkit):
             enable_screenshot (bool): Enable the screenshot tool. Defaults to True.
             enable_get_page_content (bool): Enable the get_page_content tool. Defaults to True.
             enable_close_session (bool): Enable the close_session tool. Defaults to True.
+            enable_click (bool): Enable the click tool for clicking elements. Defaults to False.
+            enable_type (bool): Enable the type tool for typing text. Defaults to False.
+            enable_get_element_text (bool): Enable getting text from specific elements. Defaults to False.
+            enable_fill_form (bool): Enable filling form fields. Defaults to False.
+            enable_wait_for_selector (bool): Enable waiting for elements. Defaults to False.
+            enable_get_session_recording (bool): Enable getting session recording URL. Defaults to False.
             all (bool): Enable all tools. Defaults to False.
+            block_ads (bool): Block ads in browser sessions. Defaults to False.
+            solve_captchas (bool): Auto-solve CAPTCHAs. Defaults to False.
             parse_html (bool): If True, extract only visible text content instead of raw HTML. Defaults to True.
                 This significantly reduces token usage and is recommended for most use cases.
             max_content_length (int, optional): Maximum character length for page content. Defaults to 100000.
@@ -46,6 +62,8 @@ class BrowserbaseTools(Toolkit):
         """
         self.parse_html = parse_html
         self.max_content_length = max_content_length
+        self.block_ads = block_ads
+        self.solve_captchas = solve_captchas
 
         self.api_key = api_key or getenv("BROWSERBASE_API_KEY")
         if not self.api_key:
@@ -100,6 +118,24 @@ class BrowserbaseTools(Toolkit):
         if all or enable_close_session:
             tools.append(self.close_session)
             async_tools.append((self.aclose_session, "close_session"))
+        if all or enable_click:
+            tools.append(self.click)
+            async_tools.append((self.aclick, "click"))
+        if all or enable_type:
+            tools.append(self.type_text)
+            async_tools.append((self.atype_text, "type_text"))
+        if all or enable_get_element_text:
+            tools.append(self.get_element_text)
+            async_tools.append((self.aget_element_text, "get_element_text"))
+        if all or enable_fill_form:
+            tools.append(self.fill_form)
+            async_tools.append((self.afill_form, "fill_form"))
+        if all or enable_wait_for_selector:
+            tools.append(self.wait_for_selector)
+            async_tools.append((self.await_for_selector, "wait_for_selector"))
+        if all or enable_get_session_recording:
+            tools.append(self.get_session_recording)
+            async_tools.append((self.aget_session_recording, "get_session_recording"))
 
         super().__init__(name="browserbase_tools", tools=tools, async_tools=async_tools, **kwargs)
 
@@ -107,7 +143,17 @@ class BrowserbaseTools(Toolkit):
         """Ensures a session exists, creating one if needed."""
         if not self._session:
             try:
-                self._session = self.app.sessions.create(project_id=self.project_id)  # type: ignore
+                browser_settings: Dict[str, Any] = {}
+                if self.block_ads:
+                    browser_settings["blockAds"] = True
+                if self.solve_captchas:
+                    browser_settings["solveCaptchas"] = True
+
+                create_kwargs: Dict[str, Any] = {"project_id": self.project_id}
+                if browser_settings:
+                    create_kwargs["browser_settings"] = browser_settings
+
+                self._session = self.app.sessions.create(**create_kwargs)  # type: ignore
                 self._connect_url = self._session.connect_url if self._session else ""  # type: ignore
                 if self._session:
                     log_debug(f"Created new session with ID: {self._session.id}")
@@ -276,10 +322,7 @@ class BrowserbaseTools(Toolkit):
             JSON string with closure status
         """
         try:
-            # First cleanup our local browser resources
             self._cleanup()
-
-            # Reset session state
             self._session = None
             self._connect_url = None
 
@@ -291,6 +334,123 @@ class BrowserbaseTools(Toolkit):
             )
         except Exception as e:
             return json.dumps({"status": "warning", "message": f"Cleanup completed with warning: {str(e)}"})
+
+    def click(self, selector: str, connect_url: Optional[str] = None) -> str:
+        """Clicks an element on the page.
+
+        Args:
+            selector (str): CSS selector of element to click
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with click status
+        """
+        try:
+            self._initialize_browser(connect_url)
+            if self._page:
+                self._page.click(selector)
+            return json.dumps({"status": "success", "selector": selector})
+        except Exception as e:
+            self._cleanup()
+            raise e
+
+    def type_text(self, selector: str, text: str, connect_url: Optional[str] = None) -> str:
+        """Types text into an input element.
+
+        Args:
+            selector (str): CSS selector of input element
+            text (str): Text to type
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with typing status
+        """
+        try:
+            self._initialize_browser(connect_url)
+            if self._page:
+                self._page.fill(selector, text)
+            return json.dumps({"status": "success", "selector": selector, "text_length": len(text)})
+        except Exception as e:
+            self._cleanup()
+            raise e
+
+    def get_element_text(self, selector: str, connect_url: Optional[str] = None) -> str:
+        """Gets text content of a specific element.
+
+        Args:
+            selector (str): CSS selector of element
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            The text content of the element
+        """
+        try:
+            self._initialize_browser(connect_url)
+            if self._page:
+                element = self._page.query_selector(selector)
+                if element:
+                    return element.inner_text()
+            return ""
+        except Exception as e:
+            self._cleanup()
+            raise e
+
+    def fill_form(self, form_data: Dict[str, str], connect_url: Optional[str] = None) -> str:
+        """Fills multiple form fields at once.
+
+        Args:
+            form_data (dict): Dictionary mapping CSS selectors to values
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with fill status
+        """
+        try:
+            self._initialize_browser(connect_url)
+            filled = []
+            if self._page:
+                for selector, value in form_data.items():
+                    self._page.fill(selector, value)
+                    filled.append(selector)
+            return json.dumps({"status": "success", "filled_fields": filled})
+        except Exception as e:
+            self._cleanup()
+            raise e
+
+    def wait_for_selector(self, selector: str, timeout: int = 30000, connect_url: Optional[str] = None) -> str:
+        """Waits for an element to appear on the page.
+
+        Args:
+            selector (str): CSS selector to wait for
+            timeout (int): Timeout in milliseconds (default 30000)
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with wait status
+        """
+        try:
+            self._initialize_browser(connect_url)
+            if self._page:
+                self._page.wait_for_selector(selector, timeout=timeout)
+            return json.dumps({"status": "success", "selector": selector})
+        except Exception as e:
+            self._cleanup()
+            raise e
+
+    def get_session_recording(self) -> str:
+        """Gets the recording URL for the current session.
+
+        Returns:
+            JSON string with recording information
+        """
+        try:
+            if not self._session:
+                return json.dumps({"status": "error", "message": "No active session"})
+
+            recording = self.app.sessions.recording.retrieve(self._session.id)
+            return json.dumps({"status": "success", "recording": str(recording)})
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
 
     async def _ainitialize_browser(self, connect_url: Optional[str] = None):
         """
@@ -401,10 +561,7 @@ class BrowserbaseTools(Toolkit):
             JSON string with closure status
         """
         try:
-            # First cleanup our local browser resources
             await self._acleanup()
-
-            # Reset session state
             self._session = None
             self._connect_url = None
 
@@ -416,3 +573,120 @@ class BrowserbaseTools(Toolkit):
             )
         except Exception as e:
             return json.dumps({"status": "warning", "message": f"Cleanup completed with warning: {str(e)}"})
+
+    async def aclick(self, selector: str, connect_url: Optional[str] = None) -> str:
+        """Clicks an element on the page asynchronously.
+
+        Args:
+            selector (str): CSS selector of element to click
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with click status
+        """
+        try:
+            await self._ainitialize_browser(connect_url)
+            if self._async_page:
+                await self._async_page.click(selector)
+            return json.dumps({"status": "success", "selector": selector})
+        except Exception as e:
+            await self._acleanup()
+            raise e
+
+    async def atype_text(self, selector: str, text: str, connect_url: Optional[str] = None) -> str:
+        """Types text into an input element asynchronously.
+
+        Args:
+            selector (str): CSS selector of input element
+            text (str): Text to type
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with typing status
+        """
+        try:
+            await self._ainitialize_browser(connect_url)
+            if self._async_page:
+                await self._async_page.fill(selector, text)
+            return json.dumps({"status": "success", "selector": selector, "text_length": len(text)})
+        except Exception as e:
+            await self._acleanup()
+            raise e
+
+    async def aget_element_text(self, selector: str, connect_url: Optional[str] = None) -> str:
+        """Gets text content of a specific element asynchronously.
+
+        Args:
+            selector (str): CSS selector of element
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            The text content of the element
+        """
+        try:
+            await self._ainitialize_browser(connect_url)
+            if self._async_page:
+                element = await self._async_page.query_selector(selector)
+                if element:
+                    return await element.inner_text()
+            return ""
+        except Exception as e:
+            await self._acleanup()
+            raise e
+
+    async def afill_form(self, form_data: Dict[str, str], connect_url: Optional[str] = None) -> str:
+        """Fills multiple form fields at once asynchronously.
+
+        Args:
+            form_data (dict): Dictionary mapping CSS selectors to values
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with fill status
+        """
+        try:
+            await self._ainitialize_browser(connect_url)
+            filled = []
+            if self._async_page:
+                for selector, value in form_data.items():
+                    await self._async_page.fill(selector, value)
+                    filled.append(selector)
+            return json.dumps({"status": "success", "filled_fields": filled})
+        except Exception as e:
+            await self._acleanup()
+            raise e
+
+    async def await_for_selector(self, selector: str, timeout: int = 30000, connect_url: Optional[str] = None) -> str:
+        """Waits for an element to appear on the page asynchronously.
+
+        Args:
+            selector (str): CSS selector to wait for
+            timeout (int): Timeout in milliseconds (default 30000)
+            connect_url (str, optional): The connection URL from an existing session
+
+        Returns:
+            JSON string with wait status
+        """
+        try:
+            await self._ainitialize_browser(connect_url)
+            if self._async_page:
+                await self._async_page.wait_for_selector(selector, timeout=timeout)
+            return json.dumps({"status": "success", "selector": selector})
+        except Exception as e:
+            await self._acleanup()
+            raise e
+
+    async def aget_session_recording(self) -> str:
+        """Gets the recording URL for the current session asynchronously.
+
+        Returns:
+            JSON string with recording information
+        """
+        try:
+            if not self._session:
+                return json.dumps({"status": "error", "message": "No active session"})
+
+            recording = self.app.sessions.recording.retrieve(self._session.id)
+            return json.dumps({"status": "success", "recording": str(recording)})
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
