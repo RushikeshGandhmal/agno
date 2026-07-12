@@ -8,11 +8,31 @@ Requires Node.js 18+ (npx downloads the package on first run).
 
 from __future__ import annotations
 
+import platform
 from typing import Any, Literal
 
 from agno.context.backend import ContextBackend
 from agno.context.provider import Status
 from agno.utils.log import log_warning
+
+
+def _get_platform_user_agent() -> str:
+    """Generate a realistic Chrome user agent based on the current platform."""
+    system = platform.system()
+    if system == "Darwin":
+        return (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    elif system == "Windows":
+        return (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    else:
+        return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 class PlaywrightMCPBackend(ContextBackend):
@@ -23,6 +43,10 @@ class PlaywrightMCPBackend(ContextBackend):
         *,
         headless: bool = True,
         browser: Literal["chromium", "firefox", "webkit"] = "chromium",
+        user_agent: str | None = None,
+        use_platform_user_agent: bool = False,
+        viewport_size: str | None = None,
+        device: str | None = None,
         include_tools: list[str] | None = None,
         exclude_tools: list[str] | None = None,
         tool_name_prefix: str | None = None,
@@ -30,6 +54,15 @@ class PlaywrightMCPBackend(ContextBackend):
     ) -> None:
         self.headless = headless
         self.browser = browser
+        # Explicit user_agent takes precedence, then platform-based if requested
+        if user_agent:
+            self.user_agent = user_agent
+        elif use_platform_user_agent:
+            self.user_agent = _get_platform_user_agent()
+        else:
+            self.user_agent = None
+        self.viewport_size = viewport_size
+        self.device = device
         self.include_tools = include_tools
         self.exclude_tools = exclude_tools
         self.tool_name_prefix = tool_name_prefix
@@ -58,6 +91,12 @@ class PlaywrightMCPBackend(ContextBackend):
             cmd_args.append("--headless")
         if self.browser != "chromium":
             cmd_args.append(f"--browser={self.browser}")
+        if self.user_agent:
+            cmd_args.append(f"--user-agent={self.user_agent}")
+        if self.viewport_size:
+            cmd_args.append(f"--viewport-size={self.viewport_size}")
+        if self.device:
+            cmd_args.append(f"--device={self.device}")
 
         return MCPTools(
             server_params=StdioServerParameters(command="npx", args=cmd_args),
